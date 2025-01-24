@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/pktline"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 )
 
 // Decode reads the next upload-request form its input and
@@ -226,7 +227,11 @@ func (d *ulReqDecoder) decodeDeepenCommits() stateFn {
 		d.err = fmt.Errorf("negative depth")
 		return nil
 	}
-	d.data.Depth = DepthCommits(n)
+	if d.data.Capabilities.Supports(capability.DeepenRelative) {
+		d.data.Depth = DepthRelativeCommits(n)
+	} else {
+		d.data.Depth = DepthCommits(n)
+	}
 
 	return d.decodeOtherWants
 }

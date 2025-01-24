@@ -266,6 +266,7 @@ func (s *RevListSuite) TestReachableObjectsNoRevisit() {
 
 	var visited []plumbing.Hash
 	err = reachableObjects(
+		nil,
 		commit,
 		map[plumbing.Hash]bool{
 			plumbing.NewHash("35e85108805c84807bc66a02d91535e1e24b38b9"): true,
@@ -274,7 +275,7 @@ func (s *RevListSuite) TestReachableObjectsNoRevisit() {
 			plumbing.NewHash("35e85108805c84807bc66a02d91535e1e24b38b9"): true,
 		},
 		nil,
-		func(h plumbing.Hash) {
+		func(h plumbing.Hash, parents []plumbing.Hash) {
 			obj, err := s.Storer.EncodedObject(plumbing.AnyObject, h)
 			s.NoError(err)
 
@@ -285,6 +286,8 @@ func (s *RevListSuite) TestReachableObjectsNoRevisit() {
 				visited = append(visited, h)
 			}
 		},
+		nil,
+		nil,
 	)
 	s.NoError(err)
 

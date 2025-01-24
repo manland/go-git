@@ -164,10 +164,6 @@ func (s *upSession) UploadPack(ctx context.Context, req *packp.UploadPackRequest
 
 	s.caps = req.Capabilities
 
-	if len(req.Shallows) > 0 {
-		return nil, fmt.Errorf("shallow not supported")
-	}
-
 	havesWithRef, err := revlist.ObjectsWithRef(s.storer, req.Wants, nil)
 	if err != nil {
 		return nil, err
@@ -194,7 +190,7 @@ func (s *upSession) UploadPack(ctx context.Context, req *packp.UploadPackRequest
 			req.UploadPackCommands <- packp.UploadPackCommand{Acks: acks, Done: haves.Done}
 		}
 		close(req.UploadPackCommands)
-		objs, err := s.objectsToUpload(req.Wants, allHaves)
+		objs, err := s.objectsToUpload(req, allHaves)
 		if err != nil {
 			pw.CloseWithError(err)
 			return
@@ -203,13 +199,51 @@ func (s *upSession) UploadPack(ctx context.Context, req *packp.UploadPackRequest
 		pw.CloseWithError(err)
 	}()
 
-	return packp.NewUploadPackResponseWithPackfile(req,
-		ioutil.NewContextReadCloser(ctx, pr),
-	), nil
+	uprwp := packp.NewUploadPackResponseWithPackfile(req, ioutil.NewContextReadCloser(ctx, pr))
+	if !req.Depth.IsZero() {
+		uprwp.ShallowUpdate, err = s.shallowUpdate(req)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return uprwp, nil
 }
 
-func (s *upSession) objectsToUpload(wants, haves []plumbing.Hash) ([]plumbing.Hash, error) {
-	return revlist.Objects(s.storer, wants, haves)
+func (s *upSession) objectsToUpload(req *packp.UploadPackRequest, haves []plumbing.Hash) ([]plumbing.Hash, error) {
+	objsToSend, err := revlist.ObjectsWithShallow(s.storer, req.Wants, haves, req.Depth, req.Shallows)
+	if err != nil {
+		return nil, err
+	}
+	hashs := make([]plumbing.Hash, len(objsToSend))
+	for i, o := range objsToSend {
+		hashs[i] = o.Hash
+	}
+	return hashs, nil
+}
+
+func (s *upSession) shallowUpdate(req *packp.UploadPackRequest) (packp.ShallowUpdate, error) {
+	objsToSend, err := revlist.ObjectsWithShallow(s.storer, req.Wants, nil, req.Depth, req.Shallows)
+	if err != nil {
+		return packp.ShallowUpdate{}, err
+	}
+	shallows := make([]plumbing.Hash, 0)
+	unshallows := make([]plumbing.Hash, 0)
+	for _, o := range objsToSend {
+		if o.IsShallow {
+			shallows = append(shallows, o.Hash)
+		} else {
+			for _, v := range req.Shallows {
+				if v.String() == o.Hash.String() {
+					unshallows = append(unshallows, o.Hash)
+					break
+				}
+			}
+		}
+	}
+	return packp.ShallowUpdate{
+		Shallows:   shallows,
+		Unshallows: unshallows,
+	}, nil
 }
 
 func (*upSession) setSupportedCapabilities(c *capability.List) error {

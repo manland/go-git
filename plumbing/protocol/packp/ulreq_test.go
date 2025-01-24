@@ -81,6 +81,19 @@ func (s *UlReqSuite) TestValidateDepthReference() {
 	s.NoError(err)
 }
 
+func (s *UlReqSuite) TestValidateDepthRelative() {
+	r := NewUploadRequest()
+	r.Wants = append(r.Wants, plumbing.NewHash("1111111111111111111111111111111111111111"))
+	r.Depth = DepthRelativeCommits(1)
+
+	err := r.Validate()
+	s.NotNil(err)
+
+	r.Capabilities.Set(capability.DeepenRelative)
+	err = r.Validate()
+	s.NoError(err)
+}
+
 func (s *UlReqSuite) TestValidateDepthSince() {
 	r := NewUploadRequest()
 	r.Wants = append(r.Wants, plumbing.NewHash("1111111111111111111111111111111111111111"))

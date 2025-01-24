@@ -34,8 +34,7 @@ func ServeUploadPack(cmd ServerCommand, s transport.UploadPackSession) (err erro
 		return err
 	}
 
-	var resp *packp.UploadPackResponse
-	resp, err = s.UploadPack(context.TODO(), req)
+	resp, err := s.UploadPack(context.TODO(), req)
 	if err != nil {
 		return err
 	}

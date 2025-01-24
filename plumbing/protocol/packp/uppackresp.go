@@ -34,6 +34,9 @@ func NewUploadPackResponse(req *UploadPackRequest) *UploadPackResponse {
 		req.Capabilities.Supports(capability.MultiACKDetailed)
 
 	return &UploadPackResponse{
+		ShallowUpdate: ShallowUpdate{
+			Shallows: req.Shallows,
+		},
 		isShallow:      isShallow,
 		isMultiACK:     isMultiACK,
 		ServerResponse: ServerResponse{req: req},

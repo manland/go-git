@@ -44,6 +44,17 @@ func (d DepthCommits) IsZero() bool {
 	return d == 0
 }
 
+// DepthRelativeCommits values stores the maximum number of requested commits in
+// the packfile.  Zero means infinite.  A negative value will have
+// undefined consequences.
+type DepthRelativeCommits int
+
+func (d DepthRelativeCommits) isDepth() {}
+
+func (d DepthRelativeCommits) IsZero() bool {
+	return d == 0
+}
+
 // DepthSince values requests only commits newer than the specified time.
 type DepthSince time.Time
 
@@ -106,6 +117,19 @@ func NewUploadRequestFromCapabilities(adv *capability.List) *UploadRequest {
 		r.Capabilities.Set(capability.Agent, capability.DefaultAgent())
 	}
 
+	if adv.Supports(capability.Shallow) {
+		r.Capabilities.Set(capability.Shallow)
+	}
+	if adv.Supports(capability.DeepenRelative) {
+		r.Capabilities.Set(capability.DeepenRelative)
+	}
+	if adv.Supports(capability.DeepenSince) {
+		r.Capabilities.Set(capability.DeepenSince)
+	}
+	if adv.Supports(capability.DeepenNot) {
+		r.Capabilities.Set(capability.DeepenNot)
+	}
+
 	return r
 }
 
@@ -136,15 +160,17 @@ func (req *UploadRequest) Validate() error {
 func (req *UploadRequest) validateRequiredCapabilities() error {
 	msg := "missing capability %s"
 
-	if len(req.Shallows) != 0 && !req.Capabilities.Supports(capability.Shallow) {
-		return fmt.Errorf(msg, capability.Shallow)
-	}
-
 	switch req.Depth.(type) {
 	case DepthCommits:
-		if req.Depth != DepthCommits(0) {
+		if req.Depth != DepthCommits(0) || len(req.Shallows) > 0 {
 			if !req.Capabilities.Supports(capability.Shallow) {
 				return fmt.Errorf(msg, capability.Shallow)
+			}
+		}
+	case DepthRelativeCommits:
+		if req.Depth != DepthCommits(0) {
+			if !req.Capabilities.Supports(capability.DeepenRelative) {
+				return fmt.Errorf(msg, capability.DeepenRelative)
 			}
 		}
 	case DepthSince:

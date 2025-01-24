@@ -114,6 +114,14 @@ func (e *ulReqEncoder) encodeDepth() stateFn {
 				return nil
 			}
 		}
+	case DepthRelativeCommits:
+		if depth != 0 {
+			commits := int(depth)
+			if _, err := pktline.Writef(e.w, "deepen %d\n", commits); err != nil {
+				e.err = fmt.Errorf("encoding depth %d: %s", depth, err)
+				return nil
+			}
+		}
 	case DepthSince:
 		when := time.Time(depth).UTC()
 		if _, err := pktline.Writef(e.w, "deepen-since %d\n", when.Unix()); err != nil {

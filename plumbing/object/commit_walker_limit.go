@@ -9,14 +9,20 @@ import (
 )
 
 type commitLimitIter struct {
-	sourceIter   CommitIter
-	limitOptions LogLimitOptions
+	sourceIter            CommitIter
+	limitOptions          LogLimitOptions
+	nb                    int
+	startCountFromReached bool
+	stopOnReached         bool
 }
 
 type LogLimitOptions struct {
-	Since    *time.Time
-	Until    *time.Time
-	TailHash plumbing.Hash
+	Since          *time.Time
+	Until          *time.Time
+	TailHash       plumbing.Hash
+	Nb             int // 0 means no limit
+	StartCountFrom []plumbing.Hash
+	StopOn         []plumbing.Hash
 }
 
 func NewCommitLimitIterFromIter(commitIter CommitIter, limitOptions LogLimitOptions) CommitIter {
@@ -31,6 +37,37 @@ func (c *commitLimitIter) Next() (*Commit, error) {
 		commit, err := c.sourceIter.Next()
 		if err != nil {
 			return nil, err
+		}
+
+		if c.limitOptions.StartCountFrom != nil || c.startCountFromReached {
+			if c.startCountFromReached {
+				c.nb++
+			} else {
+				for _, h := range c.limitOptions.StartCountFrom {
+					if commit.Hash.String() == h.String() {
+						c.startCountFromReached = true
+						break
+					}
+				}
+			}
+		} else {
+			c.nb++
+		}
+		if c.limitOptions.Nb > 0 && c.nb > c.limitOptions.Nb {
+			c.sourceIter.Close()
+			return nil, io.EOF
+		}
+
+		if c.limitOptions.StopOn != nil {
+			if c.stopOnReached {
+				c.sourceIter.Close()
+				return nil, io.EOF
+			}
+			for _, h := range c.limitOptions.StopOn {
+				if commit.Hash.String() == h.String() {
+					c.stopOnReached = true
+				}
+			}
 		}
 
 		if c.limitOptions.Since != nil && commit.Committer.When.Before(*c.limitOptions.Since) {

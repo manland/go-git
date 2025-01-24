@@ -5,10 +5,12 @@ package revlist
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 )
 
@@ -34,33 +36,64 @@ func ObjectsWithStorageForIgnores(
 	objs,
 	ignore []plumbing.Hash,
 ) ([]plumbing.Hash, error) {
-	ignore, err := objects(ignoreStore, ignore, nil, true)
+	i, err := objects(ignoreStore, nil, ignore, nil, true, nil, nil)
 	if err != nil {
 		return nil, err
 	}
+	o, err := objects(s, nil, objs, fromHashShallow(i), false, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return fromHashShallow(o), nil
+}
 
-	return objects(s, objs, ignore, false)
+type HashShallow struct {
+	Hash      plumbing.Hash
+	IsShallow bool
+}
+
+func fromHashShallow(hashs []HashShallow) []plumbing.Hash {
+	res := make([]plumbing.Hash, len(hashs))
+	for i, h := range hashs {
+		res[i] = h.Hash
+	}
+	return res
+}
+
+// ObjectsWithShallow is the same as Objects but return also shallow
+// commits.
+func ObjectsWithShallow(
+	s storer.Storer,
+	objs []plumbing.Hash,
+	ignore []plumbing.Hash,
+	depth packp.Depth,
+	shallows []plumbing.Hash,
+) ([]HashShallow, error) {
+	return objects(s, s, objs, ignore, false, depth, shallows)
 }
 
 func objects(
 	s storer.EncodedObjectStorer,
+	ss storer.ReferenceStorer,
 	objects,
 	ignore []plumbing.Hash,
 	allowMissingObjects bool,
-) ([]plumbing.Hash, error) {
+	depth packp.Depth,
+	shallows []plumbing.Hash,
+) ([]HashShallow, error) {
 	seen := hashListToSet(ignore)
-	result := make(map[plumbing.Hash]bool)
+	result := make(map[plumbing.Hash][]plumbing.Hash)
 	visited := make(map[plumbing.Hash]bool)
 
-	walkerFunc := func(h plumbing.Hash) {
+	walkerFunc := func(h plumbing.Hash, parents []plumbing.Hash) {
 		if !seen[h] {
-			result[h] = true
+			result[h] = parents
 			seen[h] = true
 		}
 	}
 
 	for _, h := range objects {
-		if err := processObject(s, h, seen, visited, ignore, walkerFunc); err != nil {
+		if err := processObject(s, ss, h, seen, visited, ignore, walkerFunc, depth, shallows); err != nil {
 			if allowMissingObjects && err == plumbing.ErrObjectNotFound {
 				continue
 			}
@@ -75,16 +108,15 @@ func objects(
 // processObject obtains the object using the hash an process it depending of its type
 func processObject(
 	s storer.EncodedObjectStorer,
+	ss storer.ReferenceStorer,
 	h plumbing.Hash,
 	seen map[plumbing.Hash]bool,
 	visited map[plumbing.Hash]bool,
 	ignore []plumbing.Hash,
-	walkerFunc func(h plumbing.Hash),
+	walkerFunc func(h plumbing.Hash, parents []plumbing.Hash),
+	depth packp.Depth,
+	shallows []plumbing.Hash,
 ) error {
-	if seen[h] {
-		return nil
-	}
-
 	o, err := s.EncodedObject(plumbing.AnyObject, h)
 	if err != nil {
 		return err
@@ -97,14 +129,14 @@ func processObject(
 
 	switch do := do.(type) {
 	case *object.Commit:
-		return reachableObjects(do, seen, visited, ignore, walkerFunc)
+		return reachableObjects(ss, do, seen, visited, ignore, walkerFunc, depth, shallows)
 	case *object.Tree:
 		return iterateCommitTrees(seen, do, walkerFunc)
 	case *object.Tag:
-		walkerFunc(do.Hash)
-		return processObject(s, do.Target, seen, visited, ignore, walkerFunc)
+		walkerFunc(do.Hash, []plumbing.Hash{})
+		return processObject(s, ss, do.Target, seen, visited, ignore, walkerFunc, depth, shallows)
 	case *object.Blob:
-		walkerFunc(do.Hash)
+		walkerFunc(do.Hash, []plumbing.Hash{})
 	default:
 		return fmt.Errorf("object type not valid: %s. "+
 			"Object reference: %s", o.Type(), o.Hash())
@@ -118,13 +150,42 @@ func processObject(
 // if a commit hash is into the 'seen' set, we will not iterate all his trees
 // and blobs objects.
 func reachableObjects(
+	ss storer.ReferenceStorer,
 	commit *object.Commit,
 	seen map[plumbing.Hash]bool,
 	visited map[plumbing.Hash]bool,
 	ignore []plumbing.Hash,
-	cb func(h plumbing.Hash),
+	cb func(h plumbing.Hash, parents []plumbing.Hash),
+	depth packp.Depth,
+	shallows []plumbing.Hash,
 ) error {
 	i := object.NewCommitPreorderIter(commit, seen, ignore)
+	if depth != nil && !depth.IsZero() {
+		// in depth scenario we need to continue to parents even if child is know
+		i = object.NewCommitPreorderIter(commit, nil, nil)
+		switch d := depth.(type) {
+		case packp.DepthCommits:
+			i = object.NewCommitLimitIterFromIter(i, object.LogLimitOptions{Nb: int(d)})
+		case packp.DepthSince:
+			when := time.Time(d).UTC()
+			i = object.NewCommitLimitIterFromIter(i, object.LogLimitOptions{Since: &when})
+		case packp.DepthReference:
+			ref, err := storer.ResolveReference(ss, plumbing.NewBranchReferenceName(string(d)))
+			if err != nil {
+				ref, err = storer.ResolveReference(ss, plumbing.NewTagReferenceName(string(d)))
+			}
+			if err == nil {
+				i = object.NewCommitLimitIterFromIter(i, object.LogLimitOptions{StopOn: []plumbing.Hash{ref.Hash()}})
+			}
+		case packp.DepthRelativeCommits:
+			if len(shallows) > 0 {
+				i = object.NewCommitLimitIterFromIter(i, object.LogLimitOptions{Nb: int(d), StartCountFrom: shallows})
+			}
+		default:
+			return fmt.Errorf("unsupported depth type")
+		}
+	}
+
 	pending := make(map[plumbing.Hash]bool)
 	addPendingParents(pending, visited, commit)
 	for {
@@ -151,7 +212,7 @@ func reachableObjects(
 			continue
 		}
 
-		cb(commit.Hash)
+		cb(commit.Hash, commit.ParentHashes)
 
 		tree, err := commit.Tree()
 		if err != nil {
@@ -178,13 +239,13 @@ func addPendingParents(pending, visited map[plumbing.Hash]bool, commit *object.C
 func iterateCommitTrees(
 	seen map[plumbing.Hash]bool,
 	tree *object.Tree,
-	cb func(h plumbing.Hash),
+	cb func(h plumbing.Hash, parents []plumbing.Hash),
 ) error {
 	if seen[tree.Hash] {
 		return nil
 	}
 
-	cb(tree.Hash)
+	cb(tree.Hash, []plumbing.Hash{})
 
 	treeWalker := object.NewTreeWalker(tree, true, seen)
 
@@ -205,16 +266,27 @@ func iterateCommitTrees(
 			continue
 		}
 
-		cb(e.Hash)
+		cb(e.Hash, []plumbing.Hash{})
 	}
 
 	return nil
 }
 
-func hashSetToList(hashes map[plumbing.Hash]bool) []plumbing.Hash {
-	var result []plumbing.Hash
-	for key := range hashes {
-		result = append(result, key)
+func hashSetToList(hashes map[plumbing.Hash][]plumbing.Hash) []HashShallow {
+	var result []HashShallow
+	for key, parents := range hashes {
+		isShallow := false
+		if len(parents) > 0 {
+			foundParent := false
+			for _, h := range parents {
+				if _, ok := hashes[h]; ok {
+					foundParent = true
+					break
+				}
+			}
+			isShallow = !foundParent
+		}
+		result = append(result, HashShallow{Hash: key, IsShallow: isShallow})
 	}
 
 	return result
@@ -238,14 +310,14 @@ func ObjectsWithRef(
 ) (map[plumbing.Hash][]plumbing.Hash, error) {
 	all := map[plumbing.Hash][]plumbing.Hash{}
 	for _, obj := range objs {
-		walkerFunc := func(h plumbing.Hash) {
+		walkerFunc := func(h plumbing.Hash, parents []plumbing.Hash) {
 			if hashes, ok := all[h]; ok {
 				all[h] = append(hashes, obj)
 			} else {
 				all[h] = []plumbing.Hash{obj}
 			}
 		}
-		if err := processObject(s, obj, map[plumbing.Hash]bool{}, map[plumbing.Hash]bool{}, ignore, walkerFunc); err != nil {
+		if err := processObject(s, nil, obj, map[plumbing.Hash]bool{}, map[plumbing.Hash]bool{}, ignore, walkerFunc, nil, nil); err != nil {
 			return nil, err
 		}
 	}
