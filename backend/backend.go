@@ -60,13 +60,13 @@ type Backend struct {
 	// PreReceiveHook is called for every command receive,
 	// if an error is returned, the receive_pack is stopped
 	// but no error is written to the writer.
-	PreReceiveHook func(cmd packp.Command, options []string) error
+	PreReceiveHook func(cmd *packp.Command, options []string) error
 	// PostReceiveHook is called for every command receive after the store is updated,
 	// but before the ref are updated, it is the last chance to avoid the update.
 	// if an error is returned, the receive_pack is stopped
 	// but no error is written to the writer. You probably want tp call a gc
 	// else orphan object can stay in the store.
-	PostReceiveHook func(cmd packp.Command, options []string) error
+	PostReceiveHook func(cmd *packp.Command, options []string) error
 	// PostUpdateHook is called when all the receive_pack is finished,
 	// give the updated branches
 	PostUpdateHook func(refs []plumbing.ReferenceName, options []string)
