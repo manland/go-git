@@ -122,9 +122,12 @@ func (b *Backend) Serve(ctx context.Context, r io.ReadCloser, w io.WriteCloser, 
 		})
 	case transport.ReceivePackService:
 		return transport.ReceivePack(ctx, st, r, w, &transport.ReceivePackRequest{
-			GitProtocol:   req.GitProtocol,
-			AdvertiseRefs: req.AdvertiseRefs,
-			StatelessRPC:  req.StatelessRPC,
+			GitProtocol:     req.GitProtocol,
+			AdvertiseRefs:   req.AdvertiseRefs,
+			StatelessRPC:    req.StatelessRPC,
+			PreReceiveHook:  b.PreReceiveHook,
+			PostReceiveHook: b.PostReceiveHook,
+			PostUpdateHook:  b.PostUpdateHook,
 		})
 	case transport.UploadArchiveService:
 		return transport.UploadArchive(ctx, st, r, w, &transport.UploadArchiveRequest{})
