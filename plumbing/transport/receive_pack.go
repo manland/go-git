@@ -23,8 +23,8 @@ type ReceivePackRequest struct {
 	GitProtocol     string
 	AdvertiseRefs   bool
 	StatelessRPC    bool
-	PreReceiveHook  func(cmd packp.Command, options []string) error
-	PostReceiveHook func(cmd packp.Command, options []string) error
+	PreReceiveHook  func(cmd *packp.Command, options []string) error
+	PostReceiveHook func(cmd *packp.Command, options []string) error
 	PostUpdateHook  func(refs []plumbing.ReferenceName, options []string)
 }
 
@@ -106,7 +106,7 @@ func ReceivePack(
 
 	if opts.PreReceiveHook != nil {
 		for _, cmd := range updreq.Commands {
-			if err := opts.PreReceiveHook(*cmd, pushOpts.Options); err != nil {
+			if err := opts.PreReceiveHook(cmd, pushOpts.Options); err != nil {
 				return err
 			}
 		}
@@ -128,7 +128,7 @@ func ReceivePack(
 
 	if opts.PostReceiveHook != nil {
 		for _, cmd := range updreq.Commands {
-			if err := opts.PostReceiveHook(*cmd, pushOpts.Options); err != nil {
+			if err := opts.PostReceiveHook(cmd, pushOpts.Options); err != nil {
 				return err
 			}
 		}
