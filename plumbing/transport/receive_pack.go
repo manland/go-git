@@ -18,14 +18,37 @@ import (
 	"github.com/go-git/go-git/v6/utils/ioutil"
 )
 
+// HookEnv carries context for a server-side hook invocation.
+type HookEnv struct {
+	// Storer is the repository storage the hook operates on.
+	// For pre-receive, this is the transaction storer — objects are
+	// readable (falls through to base) but not yet committed to
+	// permanent storage.
+	// For all other hooks, this is the base storer.
+	Storer storage.Storer
+	// GitProtocol is the GIT_PROTOCOL value (e.g. "version=2").
+	GitProtocol string
+	// PushOptions are the push options sent by the client.
+	// Nil means push options were not negotiated.
+	PushOptions *packp.PushOptions
+	// nil for no sideband
+	Writer *sideband.Muxer
+}
+
+type Hooks struct {
+	PreReceive  func(ctx context.Context, env HookEnv, cmds []*packp.Command) error
+	Update      func(ctx context.Context, env HookEnv, cmd *packp.Command) error
+	PostReceive func(ctx context.Context, env HookEnv, cmds []*packp.Command) error
+	PostUpdate  func(ctx context.Context, env HookEnv, refs []plumbing.ReferenceName) error
+}
+
 // ReceivePackRequest is a set of options for the ReceivePack service.
 type ReceivePackRequest struct {
-	GitProtocol     string
-	AdvertiseRefs   bool
-	StatelessRPC    bool
-	PreReceiveHook  func(cmd *packp.Command, options []string) error
-	PostReceiveHook func(cmd *packp.Command, options []string) error
-	PostUpdateHook  func(refs []plumbing.ReferenceName, options []string)
+	GitProtocol    string
+	AdvertiseRefs  bool
+	StatelessRPC   bool
+	Hooks          Hooks
+	ParserObserver packfile.Observer
 }
 
 // ReceivePack is a server command that serves the receive-pack service.
@@ -94,8 +117,9 @@ func ReceivePack(
 
 	var (
 		caps         = updreq.Capabilities
-		needPackfile bool
-		pushOpts     packp.PushOptions
+		needPackfile = false
+		pushOpts     = &packp.PushOptions{}
+		hookEnv      = HookEnv{Storer: st, PushOptions: pushOpts, GitProtocol: opts.GitProtocol, Writer: nil}
 	)
 
 	if updreq.Capabilities.Supports(capability.PushOptions) {
@@ -104,11 +128,9 @@ func ReceivePack(
 		}
 	}
 
-	if opts.PreReceiveHook != nil {
-		for _, cmd := range updreq.Commands {
-			if err := opts.PreReceiveHook(cmd, pushOpts.Options); err != nil {
-				return err
-			}
+	if opts.Hooks.PreReceive != nil {
+		if err := opts.Hooks.PreReceive(ctx, hookEnv, updreq.Commands); err != nil {
+			return err
 		}
 	}
 
@@ -123,14 +145,16 @@ func ReceivePack(
 	// Receive the packfile
 	var unpackErr error
 	if needPackfile {
-		unpackErr = packfile.UpdateObjectStorage(st, rd)
+		if opts.ParserObserver != nil {
+			unpackErr = packfile.UpdateObjectStorage(st, rd, packfile.WithScannerObservers(opts.ParserObserver))
+		} else {
+			unpackErr = packfile.UpdateObjectStorage(st, rd)
+		}
 	}
 
-	if opts.PostReceiveHook != nil {
-		for _, cmd := range updreq.Commands {
-			if err := opts.PostReceiveHook(cmd, pushOpts.Options); err != nil {
-				return err
-			}
+	if opts.Hooks.PostReceive != nil {
+		if err := opts.Hooks.PostReceive(ctx, hookEnv, updreq.Commands); err != nil {
+			return err
 		}
 	}
 
@@ -159,6 +183,10 @@ func ReceivePack(
 		}
 	}
 
+	if useSideband {
+		hookEnv.Writer = writer.(*sideband.Muxer)
+	}
+
 	writeCloser := ioutil.NewWriteCloser(writer, w)
 	if unpackErr != nil {
 		res := sendReportStatus(writeCloser, unpackErr, nil)
@@ -170,14 +198,14 @@ func ReceivePack(
 	cmdStatus := make(map[plumbing.ReferenceName]error)
 	updateReferences(st, updreq, cmdStatus, &firstErr)
 
-	if opts.PostUpdateHook != nil {
+	if opts.Hooks.PostUpdate != nil {
 		updatedRefs := make([]plumbing.ReferenceName, 0)
 		for ref, err := range cmdStatus {
 			if err == nil {
 				updatedRefs = append(updatedRefs, ref)
 			}
 		}
-		opts.PostUpdateHook(updatedRefs, pushOpts.Options)
+		opts.Hooks.PostUpdate(ctx, hookEnv, updatedRefs)
 	}
 
 	if err := sendReportStatus(writeCloser, firstErr, cmdStatus); err != nil {

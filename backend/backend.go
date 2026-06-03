@@ -13,7 +13,7 @@ import (
 	"log"
 	"net/url"
 
-	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/format/packfile"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 )
@@ -57,19 +57,8 @@ type Backend struct {
 	// Only used by [ServeHTTP].
 	Prefix string
 
-	// PreReceiveHook is called for every command receive,
-	// if an error is returned, the receive_pack is stopped
-	// but no error is written to the writer.
-	PreReceiveHook func(cmd *packp.Command, options []string) error
-	// PostReceiveHook is called for every command receive after the store is updated,
-	// but before the ref are updated, it is the last chance to avoid the update.
-	// if an error is returned, the receive_pack is stopped
-	// but no error is written to the writer. You probably want tp call a gc
-	// else orphan object can stay in the store.
-	PostReceiveHook func(cmd *packp.Command, options []string) error
-	// PostUpdateHook is called when all the receive_pack is finished,
-	// give the updated branches
-	PostUpdateHook func(refs []plumbing.ReferenceName, options []string)
+	Hooks          transport.Hooks
+	ParserObserver packfile.Observer
 }
 
 // New creates a Backend with the given loader.
@@ -122,12 +111,11 @@ func (b *Backend) Serve(ctx context.Context, r io.ReadCloser, w io.WriteCloser, 
 		})
 	case transport.ReceivePackService:
 		return transport.ReceivePack(ctx, st, r, w, &transport.ReceivePackRequest{
-			GitProtocol:     req.GitProtocol,
-			AdvertiseRefs:   req.AdvertiseRefs,
-			StatelessRPC:    req.StatelessRPC,
-			PreReceiveHook:  b.PreReceiveHook,
-			PostReceiveHook: b.PostReceiveHook,
-			PostUpdateHook:  b.PostUpdateHook,
+			GitProtocol:    req.GitProtocol,
+			AdvertiseRefs:  req.AdvertiseRefs,
+			StatelessRPC:   req.StatelessRPC,
+			Hooks:          b.Hooks,
+			ParserObserver: b.ParserObserver,
 		})
 	case transport.UploadArchiveService:
 		return transport.UploadArchive(ctx, st, r, w, &transport.UploadArchiveRequest{})
