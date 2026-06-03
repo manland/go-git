@@ -27,7 +27,7 @@ const (
 
 // UpdateObjectStorage updates the storer with the objects in the given
 // packfile.
-func UpdateObjectStorage(s storer.Storer, packfile io.Reader) error {
+func UpdateObjectStorage(s storer.Storer, packfile io.Reader, opts ...ParserOption) error {
 	if trace.Performance.Enabled() {
 		start := time.Now()
 		defer func() {
@@ -46,8 +46,13 @@ func UpdateObjectStorage(s storer.Storer, packfile io.Reader) error {
 			of = cfg.Extensions.ObjectFormat
 		}
 	}
-
-	p := NewParser(packfile, WithStorage(s), WithObjectFormat(of))
+	optsParser := make([]ParserOption, 2+len(opts))
+	optsParser[0] = WithStorage(s)
+	optsParser[1] = WithObjectFormat(of)
+	for i, o := range opts {
+		optsParser[2+i] = o
+	}
+	p := NewParser(packfile, optsParser...)
 	_, err := p.Parse()
 	return err
 }
