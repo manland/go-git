@@ -57,7 +57,7 @@ type Backend struct {
 	// Only used by [ServeHTTP].
 	Prefix string
 
-	Hooks          transport.Hooks
+	Hooks          transport.ReceivePackHooks
 	ParserObserver packfile.Observer
 }
 

@@ -8,7 +8,7 @@ import (
 // Option configure a Backend
 type Option func(*Backend)
 
-func WithHook(hooks transport.Hooks) Option {
+func WithHook(hooks transport.ReceivePackHooks) Option {
 	return func(b *Backend) {
 		b.Hooks = hooks
 	}
