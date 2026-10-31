@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/url"
 
+	"github.com/go-git/go-git/v6/plumbing/format/packfile"
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/utils/ioutil"
@@ -55,16 +56,23 @@ type Backend struct {
 	// Prefix is an HTTP path prefix stripped before route matching.
 	// Only used by [ServeHTTP].
 	Prefix string
+
+	Hooks          transport.ReceivePackHooks
+	ParserObserver packfile.Observer
 }
 
 // New creates a Backend with the given loader.
-func New(loader transport.Loader) *Backend {
+func New(loader transport.Loader, opts ...Option) *Backend {
 	if loader == nil {
 		loader = transport.DefaultLoader
 	}
-	return &Backend{
+	b := &Backend{
 		Loader: loader,
 	}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
 }
 
 // Serve handles a Git pack protocol request. It resolves the repository
@@ -112,9 +120,11 @@ func (b *Backend) Serve(ctx context.Context, r io.ReadCloser, w io.WriteCloser, 
 		})
 	case transport.ReceivePackService:
 		return transport.ReceivePack(ctx, st, r, w, &transport.ReceivePackRequest{
-			GitProtocol:   req.GitProtocol,
-			AdvertiseRefs: req.AdvertiseRefs,
-			StatelessRPC:  req.StatelessRPC,
+			GitProtocol:    req.GitProtocol,
+			AdvertiseRefs:  req.AdvertiseRefs,
+			StatelessRPC:   req.StatelessRPC,
+			Hooks:          b.Hooks,
+			ParserObserver: b.ParserObserver,
 		})
 	case transport.UploadArchiveService:
 		return transport.UploadArchive(ctx, st, r, w, &transport.UploadArchiveRequest{})

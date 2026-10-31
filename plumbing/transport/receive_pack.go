@@ -27,7 +27,8 @@ type ReceivePackRequest struct {
 	StatelessRPC  bool
 
 	// Hooks are optional server-side callbacks. The zero value installs none.
-	Hooks ReceivePackHooks
+	Hooks          ReceivePackHooks
+	ParserObserver packfile.Observer
 }
 
 // ReceivePackHooks holds server-side callbacks for ReceivePack.
@@ -192,7 +193,7 @@ func ReceivePack(
 	// Receive the packfile
 	var unpackErr error
 	if needPackfile {
-		unpackErr = packfile.UpdateObjectStorage(st, rd)
+		unpackErr = packfile.UpdateObjectStorage(st, rd, packfile.WithScannerObservers(opts.ParserObserver))
 	}
 
 	// Done with the request, now close the reader
